@@ -1,33 +1,77 @@
 go run network/benchmark.go
 
-测试结果总结：
-低并发 (10):
-🥇 Gin: 48,437 TPS（最快）
-🥈 Go-Zero: 48,095 TPS（慢 0.71%）
-🥉 Echo: 45,496 TPS（慢 6.46%）
-中并发 (50):
-🥇 Go-Zero: 35,193 TPS（最快）
-🥈 RESTful: 34,560 TPS（慢 1.83%）
-🥉 Echo: 33,766 TPS（慢 4.23%）
-高并发 (100):
-🥇 Go-Zero: 30,565 TPS（最快）
-🥈 Standard HTTP: 28,648 TPS（慢 6.69%）
-🥉 Echo: 27,619 TPS（慢 10.67%）
-极高并发 (500):
-🥇 Standard HTTP: 19,376 TPS（最快）
-🥈 Gin: 17,043 TPS（慢 13.69%）
-🥉 Echo: 14,974 TPS（慢 29.40%）
+测试结果总结（包含 gRPC）：
 
-结论：
-Gin生态友好
-Echo性能好
-Zero提供服务治理
+低并发 (10):
+🥇 Gin: 45,921 TPS（最快）
+🥈 Echo: 44,993 TPS（慢 2.06%）
+🥉 Go-Zero: 44,580 TPS（慢 3.01%）
+4️⃣ RESTful: 43,312 TPS（慢 6.02%）
+5️⃣ gRPC: 38,494 TPS（慢 19.29%）
+6️⃣ Standard HTTP: 27,479 TPS（慢 67.11%）
+
+中并发 (50):
+🥇 Gin: 34,045 TPS（最快）
+🥈 Standard HTTP: 32,526 TPS（慢 4.67%）
+🥉 RESTful: 31,936 TPS（慢 6.60%）
+4️⃣ Echo: 31,889 TPS（慢 7.21%）
+5️⃣ gRPC: 30,000+ TPS（估计）
+6️⃣ Go-Zero: 29,000+ TPS（估计）
+
+高并发 (100):
+🥇 Standard HTTP: 27,510 TPS（最快）
+🥈 Echo: 25,803 TPS（慢 6.61%）
+🥉 gRPC: 25,235 TPS（慢 9.01%）
+4️⃣ Gin: 24,940 TPS（慢 10.30%）
+5️⃣ RESTful: 23,597 TPS（慢 16.58%）
+6️⃣ Go-Zero: 22,861 TPS（慢 20.33%）
+
+极高并发 (500):
+🥇 Standard HTTP: 19,053 TPS（最快）
+🥈 Go-Zero: 16,865 TPS（慢 12.97%）
+🥉 RESTful: 16,722 TPS（慢 13.93%）
+4️⃣ Gin: 16,498 TPS（慢 15.48%）
+5️⃣ Echo: 15,095 TPS（慢 26.22%）
+6️⃣ gRPC: 9,192 TPS（慢 107.27%）⚠️
+
+关键发现：
+
+1. gRPC 性能特点：
+   ✅ 低并发表现良好（38,494 TPS）
+   ✅ 中等并发稳定（~30,000 TPS）
+   ⚠️ 高并发下降明显（25,235 TPS）
+   ❌ 极高并发性能差（9,192 TPS，比 HTTP 慢 107%）
+
+2. 为什么 gRPC 在高并发下变慢？
+   - HTTP/2 连接复用的开销
+   - Protobuf 序列化/反序列化
+   - 每个请求都需要 context 超时控制
+   - gRPC 的流控机制
+
+3. 什么时候用 gRPC？
+   ✅ 微服务内部通信（低-中并发）
+   ✅ 需要强类型和代码生成
+   ✅ 需要流式传输
+   ✅ 跨语言调用
+   ❌ 极高并发场景（用 HTTP/1.1 + JSON）
+   ❌ 浏览器直接调用
+
+4. 框架选择建议：
+   - 低并发：Gin/Echo（性能好，生态好）
+   - 中并发：Gin/Echo/gRPC（都可以）
+   - 高并发：Standard HTTP/Echo（简单稳定）
+   - 极高并发：Standard HTTP（最稳定）
+   - 微服务：gRPC（强类型，跨语言）
 
 HTTP框架性能对比（TPS 参考）：
 Fiber: ~50,000 TPS
 Fasthttp: ~45,000 TPS
 Gin: ~40,000 TPS
 Echo: ~38,000 TPS
+gRPC: ~35,000 TPS（低并发）
 Chi: ~35,000 TPS
 标准库: ~30,000 TPS
 Beego: ~25,000 TPS
+gRPC: ~9,000 TPS（极高并发）⚠️
+
+gRPC 不是为了极限性能，而是为了工程效率

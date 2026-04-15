@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +16,10 @@ import (
 	restful "github.com/emicklei/go-restful/v3"
 	"github.com/zeromicro/go-zero/rest/httpx"
 	"github.com/zeromicro/go-zero/rest/router"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
+	pb "github.com/ichilly2025/go-portfolio/network/grpc/pb"
 )
 
 type BenchmarkResult struct {
@@ -29,8 +35,18 @@ type BenchmarkResult struct {
 	FailCount       int
 }
 
+// gRPC server implementation for benchmark
+type grpcCalculatorServer struct {
+	pb.UnimplementedCalculatorServer
+}
+
+func (s *grpcCalculatorServer) Add(ctx context.Context, req *pb.AddRequest) (*pb.AddResponse, error) {
+	result := req.A + req.B
+	return &pb.AddResponse{Result: result}, nil
+}
+
 func main() {
-	fmt.Println("=== HTTP Server vs RESTful Server vs Gin Server vs Echo Server vs Go-Zero Server Benchmark ===\n")
+	fmt.Println("=== HTTP Server vs RESTful vs Gin vs Echo vs Go-Zero vs gRPC Benchmark ===\n")
 
 	concurrencyLevels := []int{10, 50, 100, 500}
 	requestsPerLevel := 1000
@@ -59,8 +75,12 @@ func main() {
 		zeroResult := benchmarkGoZeroServer(concurrency, requestsPerLevel)
 		printResult(zeroResult)
 
+		// Benchmark gRPC server
+		grpcResult := benchmarkGRPCServer(concurrency, requestsPerLevel)
+		printResult(grpcResult)
+
 		// Compare results
-		compareResults(httpResult, restfulResult, ginResult, echoResult, zeroResult)
+		compareResults(httpResult, restfulResult, ginResult, echoResult, zeroResult, grpcResult)
 		fmt.Println()
 	}
 }
@@ -138,6 +158,115 @@ func benchmarkGoZeroServer(concurrency, totalRequests int) BenchmarkResult {
 	defer server.Close()
 
 	return runBenchmark("Go-Zero", server.URL+"/hello", concurrency, totalRequests)
+}
+
+func benchmarkGRPCServer(concurrency, totalRequests int) BenchmarkResult {
+	// Start gRPC server
+	lis, err := net.Listen("tcp", "127.0.0.1:0") // Use random available port
+	if err != nil {
+		panic(fmt.Sprintf("failed to listen: %v", err))
+	}
+
+	s := grpc.NewServer()
+	pb.RegisterCalculatorServer(s, &grpcCalculatorServer{})
+
+	// Start server in background
+	go func() {
+		if err := s.Serve(lis); err != nil {
+			panic(fmt.Sprintf("failed to serve: %v", err))
+		}
+	}()
+	defer s.Stop()
+
+	// Get the actual address
+	addr := lis.Addr().String()
+
+	return runGRPCBenchmark("gRPC", addr, concurrency, totalRequests)
+}
+
+func runGRPCBenchmark(serverType, addr string, concurrency, totalRequests int) BenchmarkResult {
+	result := BenchmarkResult{
+		ServerType:    serverType,
+		TotalRequests: totalRequests,
+		Concurrency:   concurrency,
+	}
+
+	var wg sync.WaitGroup
+	requestsPerWorker := totalRequests / concurrency
+
+	responseTimes := make([]time.Duration, totalRequests)
+	successCount := 0
+	failCount := 0
+	var mu sync.Mutex
+
+	startTime := time.Now()
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+
+			// Create gRPC client for this worker
+			conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				mu.Lock()
+				failCount += requestsPerWorker
+				mu.Unlock()
+				return
+			}
+			defer conn.Close()
+
+			client := pb.NewCalculatorClient(conn)
+
+			for j := 0; j < requestsPerWorker; j++ {
+				reqStart := time.Now()
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				_, err := client.Add(ctx, &pb.AddRequest{A: 10, B: 20})
+				cancel()
+				reqDuration := time.Since(reqStart)
+
+				mu.Lock()
+				idx := workerID*requestsPerWorker + j
+				responseTimes[idx] = reqDuration
+
+				if err != nil {
+					failCount++
+				} else {
+					successCount++
+				}
+				mu.Unlock()
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	totalTime := time.Since(startTime)
+
+	// Calculate statistics
+	var totalResponseTime time.Duration
+	minResponseTime := responseTimes[0]
+	maxResponseTime := responseTimes[0]
+
+	for _, rt := range responseTimes {
+		totalResponseTime += rt
+		if rt < minResponseTime {
+			minResponseTime = rt
+		}
+		if rt > maxResponseTime {
+			maxResponseTime = rt
+		}
+	}
+	avgResponseTime := totalResponseTime / time.Duration(totalRequests)
+
+	result.TotalTime = totalTime
+	result.TPS = float64(totalRequests) / totalTime.Seconds()
+	result.AvgResponseTime = avgResponseTime
+	result.MinResponseTime = minResponseTime
+	result.MaxResponseTime = maxResponseTime
+	result.SuccessCount = successCount
+	result.FailCount = failCount
+
+	return result
 }
 
 func runBenchmark(serverType, url string, concurrency, totalRequests int) BenchmarkResult {
@@ -225,12 +354,12 @@ func printResult(result BenchmarkResult) {
 	fmt.Println()
 }
 
-func compareResults(http, restful, gin, echo, zero BenchmarkResult) {
+func compareResults(http, restful, gin, echo, zero, grpc BenchmarkResult) {
 	fmt.Println("  Comparison:")
 	
 	// Find the fastest
-	results := []BenchmarkResult{http, restful, gin, echo, zero}
-	names := []string{"Standard HTTP", "RESTful", "Gin", "Echo", "Go-Zero"}
+	results := []BenchmarkResult{http, restful, gin, echo, zero, grpc}
+	names := []string{"Standard HTTP", "RESTful", "Gin", "Echo", "Go-Zero", "gRPC"}
 	
 	fastest := results[0]
 	fastestName := names[0]

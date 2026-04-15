@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package calculator;
+
+option go_package = "network/grpc/pb";
+
+// Calculator 服务定义
+service Calculator {
+    // 加法
+    rpc Add(AddRequest) returns (AddResponse);
+}
+
+// 加法请求
+message AddRequest {
+    int32 a = 1;
+    int32 b = 2;
+}
+
+// 加法响应
+message AddResponse {
+    int32 result = 1;
+}
